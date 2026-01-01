@@ -274,6 +274,18 @@
             box-shadow: 0 10px 30px rgba(0, 212, 255, 0.4);
         }
 
+        .btn.muted {
+            border-color: #666;
+            color: #666;
+            box-shadow: none;
+        }
+
+        .btn.muted:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: #888;
+            color: #888;
+        }
+
         .instructions {
             margin-top: 20px;
             text-align: center;
@@ -498,6 +510,9 @@
         <div class="controls">
             <button class="btn btn-primary" id="startBtn" onclick="startGame()">开始游戏</button>
             <button class="btn btn-secondary" id="pauseBtn" onclick="togglePause()" disabled>暂停</button>
+            <button class="btn btn-secondary" id="soundBtn" onclick="toggleSound()">
+                <span id="soundIcon">🔊</span>
+            </button>
         </div>
 
         <div class="speed-selector">
@@ -538,6 +553,139 @@
         let isPaused = false;
         let isGameOver = false;
         let gameSpeed = 100;
+        let isSoundOn = true;
+
+        // 音频管理器 (Web Audio API)
+        const soundManager = {
+            ctx: null,
+            bgmNodes: [],
+            isBgmPlaying: false,
+
+            init: function () {
+                try {
+                    window.AudioContext = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioContext();
+                } catch (e) {
+                    console.warn('Web Audio API not supported');
+                }
+            },
+
+            playTone: function (freq, type, duration, vol = 0.1) {
+                if (!this.ctx || !isSoundOn) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+
+                gain.gain.setValueAtTime(vol, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + duration);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + duration);
+            },
+
+            playEat: function () {
+                if (!this.ctx || !isSoundOn) return;
+                // 经典的硬币/得分音效：快速的频率爬升
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(400, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(800, this.ctx.currentTime + 0.1);
+
+                gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.1);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.1);
+            },
+
+            playMove: function () {
+                // 极短的点击声
+                this.playTone(150, 'triangle', 0.05, 0.05);
+            },
+
+            playGameOver: function () {
+                if (!this.ctx || !isSoundOn) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(200, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(50, this.ctx.currentTime + 0.5);
+
+                gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.5);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.5);
+
+                this.stopBGM();
+            },
+
+            startBGM: function () {
+                if (!this.ctx || !isSoundOn || this.isBgmPlaying) return;
+
+                // 简单的生成式背景音：两个低频振荡器做和弦
+                const freq1 = 110; // A2
+                const freq2 = 164.81; // E3
+
+                const osc1 = this.ctx.createOscillator();
+                const osc2 = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                osc1.type = 'sine';
+                osc2.type = 'triangle';
+
+                osc1.frequency.setValueAtTime(freq1, this.ctx.currentTime);
+                osc2.frequency.setValueAtTime(freq2, this.ctx.currentTime);
+
+                // LFO for modulation
+                const lfo = this.ctx.createOscillator();
+                lfo.type = 'sine';
+                lfo.frequency.value = 0.5; // 0.5Hz speed
+                const lfoGain = this.ctx.createGain();
+                lfoGain.gain.value = 0.02; // Depth
+
+                lfo.connect(lfoGain);
+                lfoGain.connect(gain.gain);
+
+                gain.gain.setValueAtTime(0.05, this.ctx.currentTime);
+
+                osc1.connect(gain);
+                osc2.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc1.start();
+                osc2.start();
+                lfo.start();
+
+                this.bgmNodes = [osc1, osc2, lfo, gain]; // Keep track to stop later
+                this.isBgmPlaying = true;
+            },
+
+            stopBGM: function () {
+                if (this.bgmNodes.length > 0) {
+                    this.bgmNodes.forEach(node => {
+                        try { node.stop(); } catch (e) { }
+                        try { node.disconnect(); } catch (e) { }
+                    });
+                    this.bgmNodes = [];
+                }
+                this.isBgmPlaying = false;
+            }
+        };
 
         // DOM 元素
         const gameBoard = document.getElementById('gameBoard');
@@ -630,6 +778,7 @@
 
             // 检查碰撞
             if (checkCollision(head)) {
+                soundManager.playGameOver();
                 gameOver();
                 return;
             }
@@ -638,6 +787,7 @@
 
             // 检查是否吃到食物
             if (head.x === food.x && head.y === food.y) {
+                soundManager.playEat();
                 score += 10;
                 scoreDisplay.textContent = score;
                 spawnFood();
@@ -650,6 +800,8 @@
                 }
             } else {
                 snake.pop();
+                // 只有在没吃到食物也就是正常移动时，才偶尔播放移动音效，或者每次都播（这里选择每次，但声音很小）
+                // soundManager.playMove(); // 移动音效如果不做很细致，可能会很吵，先尝试在转弯时播放？
             }
 
             render();
@@ -687,6 +839,17 @@
             nextDirection = 'right';
             scoreDisplay.textContent = score;
             gameOverlay.classList.remove('active');
+
+            // 初始化音频上下文（需要用户交互）
+            if (!soundManager.ctx) {
+                soundManager.init();
+            }
+            // 确保 AudioContext 是运行状态（浏览器可能会挂起它）
+            if (soundManager.ctx && soundManager.ctx.state === 'suspended') {
+                soundManager.ctx.resume();
+            }
+
+            soundManager.startBGM();
 
             // 初始化
             initSnake();
@@ -748,6 +911,7 @@
 
             if (newDirection !== opposites[direction]) {
                 nextDirection = newDirection;
+                soundManager.playMove();
             }
         }
 
@@ -780,6 +944,25 @@
                 }
             }
         });
+
+        // 声音开关控制
+        function toggleSound() {
+            isSoundOn = !isSoundOn;
+            const btn = document.getElementById('soundBtn');
+            const icon = document.getElementById('soundIcon');
+
+            if (isSoundOn) {
+                icon.textContent = '🔊';
+                btn.classList.remove('muted');
+                if (gameLoop && !isPaused && !isGameOver) {
+                    soundManager.startBGM();
+                }
+            } else {
+                icon.textContent = '🔇';
+                btn.classList.add('muted');
+                soundManager.stopBGM();
+            }
+        }
 
         // 创建背景粒子
         function createParticles() {

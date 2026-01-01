@@ -306,8 +306,8 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0, 0, 0, 0.85);
-            backdrop-filter: blur(5px);
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(3px);
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -476,6 +476,27 @@
             border-color: #00ff88;
             color: #00ff88;
         }
+
+        /* AI 模式按钮激活状态 */
+        #aiBtn.active {
+            background: linear-gradient(135deg, rgba(138, 43, 226, 0.3), rgba(0, 212, 255, 0.3));
+            border-color: #00d4ff;
+            color: #00d4ff;
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+            animation: ai-pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes ai-pulse {
+
+            0%,
+            100% {
+                box-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+            }
+
+            50% {
+                box-shadow: 0 0 35px rgba(138, 43, 226, 0.7);
+            }
+        }
     </style>
 </head>
 
@@ -512,6 +533,9 @@
             <button class="btn btn-secondary" id="pauseBtn" onclick="togglePause()" disabled>暂停</button>
             <button class="btn btn-secondary" id="soundBtn" onclick="toggleSound()">
                 <span id="soundIcon">🔊</span>
+            </button>
+            <button class="btn btn-secondary" id="aiBtn" onclick="toggleAI()">
+                <span id="aiIcon">🤖 AI</span>
             </button>
         </div>
 
@@ -554,6 +578,7 @@
         let isGameOver = false;
         let gameSpeed = 100;
         let isSoundOn = true;
+        let isAIMode = false;  // AI 模式开关
 
         // 音频管理器 (Web Audio API)
         const soundManager = {
@@ -765,6 +790,11 @@
 
         // 移动蛇
         function moveSnake() {
+            // AI 模式：让 AI 决定下一步方向
+            if (isAIMode) {
+                nextDirection = getAIDirection();
+            }
+
             direction = nextDirection;
 
             const head = { ...snake[0] };
@@ -823,10 +853,17 @@
             isGameOver = true;
             clearInterval(gameLoop);
             gameLoop = null;
-            finalScoreDisplay.textContent = score;
-            gameOverlay.classList.add('active');
-            startBtn.textContent = '再来一局';
-            pauseBtn.disabled = true;
+
+            // 先渲染最终状态（显示撞击位置）
+            render();
+
+            // 延迟显示覆盖层，让玩家看到是怎么失败的
+            setTimeout(() => {
+                finalScoreDisplay.textContent = score;
+                gameOverlay.classList.add('active');
+                startBtn.textContent = '再来一局';
+                pauseBtn.disabled = true;
+            }, 1500); // 1.5秒后显示覆盖层
         }
 
         // 开始游戏
@@ -975,6 +1012,327 @@
                 particle.style.animationDuration = (Math.random() * 10 + 10) + 's';
                 container.appendChild(particle);
             }
+        }
+
+        // ============ AI 自动驾驶功能 ============
+
+        // AI 开关
+        function toggleAI() {
+            isAIMode = !isAIMode;
+            const btn = document.getElementById('aiBtn');
+            const icon = document.getElementById('aiIcon');
+
+            if (isAIMode) {
+                btn.classList.add('active');
+                icon.textContent = '🤖 AI ON';
+                // 如果游戏还没开始，自动开始
+                if (!gameLoop && !isPaused) {
+                    startGame();
+                }
+            } else {
+                btn.classList.remove('active');
+                icon.textContent = '🤖 AI';
+            }
+        }
+
+        // 检测某个位置是否安全（不会撞墙或撞到蛇身）
+        function isSafePosition(pos, snakeBody, willEatFood) {
+            // 检查是否撞墙
+            if (pos.x < 0 || pos.x >= GRID_SIZE || pos.y < 0 || pos.y >= GRID_SIZE) {
+                return false;
+            }
+
+            // 如果会吃到食物，尾巴不会移动，需要检查完整蛇身
+            // 如果不会吃到食物，尾巴会移动，可以排除尾巴
+            const bodyToCheck = willEatFood ? snakeBody : snakeBody.slice(0, -1);
+
+            return !bodyToCheck.some(segment => segment.x === pos.x && segment.y === pos.y);
+        }
+
+        // 获取某个方向的下一个位置
+        function getNextPosition(head, dir) {
+            const moves = {
+                'up': { x: head.x, y: head.y - 1 },
+                'down': { x: head.x, y: head.y + 1 },
+                'left': { x: head.x - 1, y: head.y },
+                'right': { x: head.x + 1, y: head.y }
+            };
+            return moves[dir];
+        }
+
+        // 计算曼哈顿距离
+        function manhattanDistance(a, b) {
+            return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+        }
+
+        // 获取反方向
+        function getOppositeDirection(dir) {
+            const opposites = { 'up': 'down', 'down': 'up', 'left': 'right', 'right': 'left' };
+            return opposites[dir];
+        }
+
+        // 计算可达的空间大小（使用 flood fill 算法）
+        function countAccessibleSpace(startPos, snakeBody) {
+            const visited = new Set();
+            const queue = [startPos];
+            visited.add(`${startPos.x},${startPos.y}`);
+
+            const snakeSet = new Set(snakeBody.map(s => `${s.x},${s.y}`));
+
+            while (queue.length > 0) {
+                const current = queue.shift();
+
+                const neighbors = [
+                    { x: current.x, y: current.y - 1 },
+                    { x: current.x, y: current.y + 1 },
+                    { x: current.x - 1, y: current.y },
+                    { x: current.x + 1, y: current.y }
+                ];
+
+                for (const neighbor of neighbors) {
+                    const key = `${neighbor.x},${neighbor.y}`;
+                    if (!visited.has(key) &&
+                        neighbor.x >= 0 && neighbor.x < GRID_SIZE &&
+                        neighbor.y >= 0 && neighbor.y < GRID_SIZE &&
+                        !snakeSet.has(key)) {
+                        visited.add(key);
+                        queue.push(neighbor);
+                    }
+                }
+            }
+
+            return visited.size;
+        }
+
+        // AI 决策：选择最佳方向 - 高级版
+        function getAIDirection() {
+            const head = snake[0];
+            const tail = snake[snake.length - 1];
+            const directions = ['up', 'down', 'left', 'right'];
+            const opposite = getOppositeDirection(direction);
+            const snakeLen = snake.length;
+            const gridArea = GRID_SIZE * GRID_SIZE;
+            const fillRatio = snakeLen / gridArea;
+
+            // 过滤掉反方向
+            const validDirections = directions.filter(dir => dir !== opposite);
+
+            // 收集所有安全的移动选项
+            const safeMoves = [];
+
+            for (const dir of validDirections) {
+                const nextPos = getNextPosition(head, dir);
+                const willEatFood = nextPos.x === food.x && nextPos.y === food.y;
+
+                // 检查基本安全性
+                if (!isSafePosition(nextPos, snake, willEatFood)) {
+                    continue;
+                }
+
+                // 模拟移动后的蛇身
+                const futureSnake = [nextPos, ...snake];
+                if (!willEatFood) {
+                    futureSnake.pop();
+                }
+
+                const futureTail = futureSnake[futureSnake.length - 1];
+
+                // 关键检查：移动后能否到达尾巴
+                const canReachTail = hasPathToTarget(nextPos, futureTail, futureSnake);
+
+                // 计算可达空间
+                const accessibleSpace = countAccessibleSpace(nextPos, futureSnake);
+
+                // 计算到食物的距离
+                const distanceToFood = willEatFood ? 0 : manhattanDistance(nextPos, food);
+
+                // 计算综合得分
+                let score = 0;
+
+                // 基础分：可达空间越大越好
+                score += accessibleSpace * 2;
+
+                // 尾巴可达加分
+                if (canReachTail) score += 100;
+
+                // 食物加分（根据填充率调整）
+                if (willEatFood) {
+                    score += fillRatio < 0.5 ? 200 : 50; // 前半程积极吃，后半程谨慎
+                }
+
+                // 距离食物的惩罚（越远越低分）
+                score -= distanceToFood * (fillRatio < 0.3 ? 5 : 1);
+
+                safeMoves.push({
+                    direction: dir,
+                    distanceToFood: distanceToFood,
+                    accessibleSpace: accessibleSpace,
+                    canReachTail: canReachTail,
+                    isFood: willEatFood,
+                    score: score,
+                    nextPos: nextPos
+                });
+            }
+
+            if (safeMoves.length === 0) {
+                return direction; // 无路可走
+            }
+
+            // 使用综合评分系统选择最佳方向
+            safeMoves.sort((a, b) => b.score - a.score);
+
+            // 返回得分最高的选项
+            return safeMoves[0].direction;
+        }
+
+        // 生成虚拟哈密顿路径索引（基于蛇形扫描）
+        function getHamiltonIndex(pos) {
+            // 使用蛇形（之字形）扫描顺序
+            if (pos.y % 2 === 0) {
+                return pos.y * GRID_SIZE + pos.x;
+            } else {
+                return pos.y * GRID_SIZE + (GRID_SIZE - 1 - pos.x);
+            }
+        }
+
+        // 检查从起点到目标是否存在路径
+        function hasPathToTarget(start, target, snakeBody) {
+            if (start.x === target.x && start.y === target.y) return true;
+            if (manhattanDistance(start, target) === 1) return true;
+
+            const visited = new Set();
+            const queue = [start];
+            visited.add(`${start.x},${start.y}`);
+
+            // 蛇身集合（除了目标点，通常是尾巴）
+            const snakeSet = new Set();
+            for (let i = 0; i < snakeBody.length - 1; i++) {
+                snakeSet.add(`${snakeBody[i].x},${snakeBody[i].y}`);
+            }
+
+            while (queue.length > 0) {
+                const current = queue.shift();
+
+                const neighbors = [
+                    { x: current.x, y: current.y - 1 },
+                    { x: current.x, y: current.y + 1 },
+                    { x: current.x - 1, y: current.y },
+                    { x: current.x + 1, y: current.y }
+                ];
+
+                for (const neighbor of neighbors) {
+                    // 到达目标附近
+                    if (manhattanDistance(neighbor, target) <= 1) {
+                        return true;
+                    }
+
+                    const key = `${neighbor.x},${neighbor.y}`;
+                    if (!visited.has(key) &&
+                        neighbor.x >= 0 && neighbor.x < GRID_SIZE &&
+                        neighbor.y >= 0 && neighbor.y < GRID_SIZE &&
+                        !snakeSet.has(key)) {
+                        visited.add(key);
+                        queue.push(neighbor);
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        // 检查是否能从起点到达尾巴附近
+        function canPathToTail(start, tail, snakeBody) {
+            // 使用 BFS 检查是否能到达尾巴
+            const visited = new Set();
+            const queue = [start];
+            visited.add(`${start.x},${start.y}`);
+
+            // 蛇身集合（除了尾巴）
+            const snakeSet = new Set();
+            for (let i = 0; i < snakeBody.length - 1; i++) {
+                snakeSet.add(`${snakeBody[i].x},${snakeBody[i].y}`);
+            }
+
+            while (queue.length > 0) {
+                const current = queue.shift();
+
+                // 到达尾巴附近
+                if (Math.abs(current.x - tail.x) + Math.abs(current.y - tail.y) <= 1) {
+                    return true;
+                }
+
+                const neighbors = [
+                    { x: current.x, y: current.y - 1 },
+                    { x: current.x, y: current.y + 1 },
+                    { x: current.x - 1, y: current.y },
+                    { x: current.x + 1, y: current.y }
+                ];
+
+                for (const neighbor of neighbors) {
+                    const key = `${neighbor.x},${neighbor.y}`;
+                    if (!visited.has(key) &&
+                        neighbor.x >= 0 && neighbor.x < GRID_SIZE &&
+                        neighbor.y >= 0 && neighbor.y < GRID_SIZE &&
+                        !snakeSet.has(key)) {
+                        visited.add(key);
+                        queue.push(neighbor);
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        // 检查从起点到终点是否存在路径（BFS）
+        function checkPathExists(start, end, snakeBody) {
+            // 如果起点就是终点（或相邻），直接返回 true
+            if (manhattanDistance(start, end) <= 1) {
+                return true;
+            }
+
+            const visited = new Set();
+            const queue = [start];
+            visited.add(`${start.x},${start.y}`);
+
+            // 蛇身集合（除了尾巴，因为我们要到达尾巴）
+            const snakeSet = new Set();
+            for (let i = 0; i < snakeBody.length - 1; i++) {
+                snakeSet.add(`${snakeBody[i].x},${snakeBody[i].y}`);
+            }
+
+            // BFS 限制搜索深度，避免太慢
+            let steps = 0;
+            const maxSteps = Math.min(GRID_SIZE * GRID_SIZE, snake.length * 3);
+
+            while (queue.length > 0 && steps < maxSteps) {
+                const current = queue.shift();
+                steps++;
+
+                // 检查是否到达目标（尾巴相邻位置也算）
+                if (manhattanDistance(current, end) <= 1) {
+                    return true;
+                }
+
+                const neighbors = [
+                    { x: current.x, y: current.y - 1 },
+                    { x: current.x, y: current.y + 1 },
+                    { x: current.x - 1, y: current.y },
+                    { x: current.x + 1, y: current.y }
+                ];
+
+                for (const neighbor of neighbors) {
+                    const key = `${neighbor.x},${neighbor.y}`;
+                    if (!visited.has(key) &&
+                        neighbor.x >= 0 && neighbor.x < GRID_SIZE &&
+                        neighbor.y >= 0 && neighbor.y < GRID_SIZE &&
+                        !snakeSet.has(key)) {
+                        visited.add(key);
+                        queue.push(neighbor);
+                    }
+                }
+            }
+
+            return false;
         }
 
         // 初始化

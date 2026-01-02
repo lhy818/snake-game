@@ -1104,79 +1104,80 @@
             return visited.size;
         }
 
-        // AI 决策：选择最佳方向 - 路径规划版
+        // AI 决策：选择最佳方向 - 全局路径规划版
         function getAIDirection() {
             const head = snake[0];
             const directions = ['up', 'down', 'left', 'right'];
             const opposite = getOppositeDirection(direction);
 
-            // 过滤掉反方向，得到可用方向
-            const validDirections = directions.filter(dir => dir !== opposite);
+            // 1. 获取所有通过基础安全检查（不撞墙、不撞自己）的移动
+            const moves = [];
+            for (const dir of directions) {
+                // 允许掉头吗？通常不允许，但在某些极端死胡同可能需要（但这里我们遵循游戏规则不能直接掉头）
+                if (dir === opposite) continue;
 
-            // 收集所有安全的移动选项
-            const safeMoves = [];
-
-            for (const dir of validDirections) {
                 const nextPos = getNextPosition(head, dir);
                 const willEatFood = nextPos.x === food.x && nextPos.y === food.y;
 
-                // 检查基本安全性（撞墙、撞自己）
-                if (!isSafePosition(nextPos, snake, willEatFood)) {
-                    continue;
+                if (isSafePosition(nextPos, snake, willEatFood)) {
+                    // 模拟这一步
+                    const futureSnake = [nextPos, ...snake];
+                    if (!willEatFood) futureSnake.pop();
+                    const futureTail = futureSnake[futureSnake.length - 1];
+
+                    // 计算关键指标
+                    const canReachTail = hasPathToTarget(nextPos, futureTail, futureSnake);
+                    // 使用 BFS 计算到食物的真实步数（而不是直线距离），这样才能绕过障碍
+                    const bfsData = getPathTo(nextPos, food, futureSnake);
+                    const bfsDist = bfsData.length > 0 ? bfsData.length : Infinity;
+                    // 如果就在食物边上，BFS 距离是 0（因为 getPathTo 返回路径数组，只有起点终点不同才有长度）
+                    // 修正：getPathTo 返回的是路径节点数组。如果 nextPos 就是 food，长度应该是 0 吗？
+                    // 实际上如果 nextPos === food，getPathTo 应该返回包含 food 的数组或者空？
+                    // 我们可以简单判断：如果 willEatFood, dist = 0.
+                    const realDistToFood = willEatFood ? 0 : bfsDist;
+
+                    const space = countAccessibleSpace(nextPos, futureSnake);
+
+                    moves.push({
+                        dir,
+                        canReachTail,
+                        dist: realDistToFood,
+                        space,
+                        isFood: willEatFood
+                    });
+                }
+            }
+
+            if (moves.length === 0) return direction; // 必死无疑
+
+            // 2. 决策逻辑
+
+            // 优先层级 1：能到达尾巴（绝对安全）
+            const safeMoves = moves.filter(m => m.canReachTail);
+
+            if (safeMoves.length > 0) {
+                // 在绝对安全的移动中，寻找能到达食物的
+                const pathsToFood = safeMoves.filter(m => m.dist < Infinity);
+
+                if (pathsToFood.length > 0) {
+                    // 如果有路能吃到食物，选最近的那条（真实路径最短）
+                    // 如果路径长度一样，选空间最大的
+                    pathsToFood.sort((a, b) => {
+                        if (a.dist !== b.dist) return a.dist - b.dist;
+                        return b.space - a.space;
+                    });
+                    return pathsToFood[0].dir;
                 }
 
-                // 模拟移动后的蛇身
-                const futureSnake = [nextPos, ...snake];
-                if (!willEatFood) {
-                    futureSnake.pop();
-                }
-                const futureTail = futureSnake[futureSnake.length - 1];
-
-                // 关键检查：移动后能否到达尾巴
-                const canReachTail = hasPathToTarget(nextPos, futureTail, futureSnake);
-
-                // 计算到食物的距离
-                const distanceToFood = willEatFood ? 0 : manhattanDistance(nextPos, food);
-
-                safeMoves.push({
-                    direction: dir,
-                    distanceToFood: distanceToFood,
-                    canReachTail: canReachTail,
-                    isFood: willEatFood,
-                    nextPos: nextPos
-                });
-            }
-
-            if (safeMoves.length === 0) {
-                return direction; // 无路可走
-            }
-
-            const snakeLen = snake.length;
-
-            // 策略 1：优先选择能到达尾巴的安全路线
-            const tailReachable = safeMoves.filter(m => m.canReachTail);
-
-            if (tailReachable.length > 0) {
-                // 在能到达尾巴的选项中，选离食物最近的
-                tailReachable.sort((a, b) => a.distanceToFood - b.distanceToFood);
-                return tailReachable[0].direction;
-            }
-
-            // 策略 2：如果没有能到达尾巴的路
-            // 对于短蛇（长度<10），选择空间最大的方向
-            // 对于长蛇，选离食物最近的（赌一把）
-            if (snakeLen < 10) {
-                // 计算每个方向的可达空间
-                safeMoves.forEach(m => {
-                    const futureSnake = [m.nextPos, ...snake];
-                    if (!m.isFood) futureSnake.pop();
-                    m.space = countAccessibleSpace(m.nextPos, futureSnake);
-                });
+                // 如果虽然能活着（找得到尾巴），但找不到去食物的路（被包围了）
+                // 那就选空间最大的，追着尾巴跑，等待时机
                 safeMoves.sort((a, b) => b.space - a.space);
-            } else {
-                safeMoves.sort((a, b) => a.distanceToFood - b.distanceToFood);
+                return safeMoves[0].dir;
             }
-            return safeMoves[0].direction;
+
+            // 优先层级 2：虽然找不到尾巴（可能会死），但为了求生，选空间最大的拖延时间
+            moves.sort((a, b) => b.space - a.space);
+            return moves[0].dir;
         }
 
         // 生成虚拟哈密顿路径索引（基于蛇形扫描）
@@ -1279,54 +1280,72 @@
 
         // 检查从起点到终点是否存在路径（BFS）
         function checkPathExists(start, end, snakeBody) {
-            // 如果起点就是终点（或相邻），直接返回 true
-            if (manhattanDistance(start, end) <= 1) {
-                return true;
-            }
+            // 简化版 BFS，只返回是否存在路径
+            if (manhattanDistance(start, end) <= 1) return true;
 
+            // ... (逻辑保持不变，但为了代码完整性，这里可以复用已有的 checkPathExists 逻辑，或者直接用 getPathTo 来替代)
+            // 为了性能，我们保留这个轻量级的 checkPathExists，或者干脆把它们合并。
+            // 既然报错是因为缺 getPathTo，我就加上它。
+
+            // 这里其实可以复用 getPathTo，判断返回值是否 > 0
+            const path = getPathTo(start, end, snakeBody);
+            return path.length > 0;
+        }
+
+        // 核心路径规划函数：BFS 寻找最短路径
+        function getPathTo(start, target, snakeBody) {
+            const queue = [{ pos: start, path: [] }];
             const visited = new Set();
-            const queue = [start];
             visited.add(`${start.x},${start.y}`);
 
-            // 蛇身集合（除了尾巴，因为我们要到达尾巴）
-            const snakeSet = new Set();
+            const obstacles = new Set();
+            // 注意：蛇尾可能会移动，但在严格模式下我们视为静态障碍更安全
             for (let i = 0; i < snakeBody.length - 1; i++) {
-                snakeSet.add(`${snakeBody[i].x},${snakeBody[i].y}`);
+                obstacles.add(`${snakeBody[i].x},${snakeBody[i].y}`);
             }
 
-            // BFS 限制搜索深度，避免太慢
             let steps = 0;
-            const maxSteps = Math.min(GRID_SIZE * GRID_SIZE, snake.length * 3);
+            const maxSteps = GRID_SIZE * GRID_SIZE * 2; // 防止死循环
 
             while (queue.length > 0 && steps < maxSteps) {
                 const current = queue.shift();
                 steps++;
+                const { pos, path } = current;
 
-                // 检查是否到达目标（尾巴相邻位置也算）
-                if (manhattanDistance(current, end) <= 1) {
-                    return true;
+                if (pos.x === target.x && pos.y === target.y) {
+                    return path;
                 }
 
                 const neighbors = [
-                    { x: current.x, y: current.y - 1 },
-                    { x: current.x, y: current.y + 1 },
-                    { x: current.x - 1, y: current.y },
-                    { x: current.x + 1, y: current.y }
+                    { x: pos.x, y: pos.y - 1 },
+                    { x: pos.x, y: pos.y + 1 },
+                    { x: pos.x - 1, y: pos.y },
+                    { x: pos.x + 1, y: pos.y }
                 ];
 
-                for (const neighbor of neighbors) {
-                    const key = `${neighbor.x},${neighbor.y}`;
-                    if (!visited.has(key) &&
-                        neighbor.x >= 0 && neighbor.x < GRID_SIZE &&
-                        neighbor.y >= 0 && neighbor.y < GRID_SIZE &&
-                        !snakeSet.has(key)) {
-                        visited.add(key);
-                        queue.push(neighbor);
+                for (const n of neighbors) {
+                    if (n.x >= 0 && n.x < GRID_SIZE && n.y >= 0 && n.y < GRID_SIZE) {
+                        const key = `${n.x},${n.y}`;
+                        if (!visited.has(key) && !obstacles.has(key)) {
+                            visited.add(key);
+                            queue.push({
+                                pos: n,
+                                path: [...path, n]
+                            });
+                        }
                     }
                 }
             }
+            return []; // 没找到路径
+        }
 
-            return false;
+        // 辅助：依据坐标差计算方向
+        function getDirectionFromPos(from, to) {
+            if (to.x > from.x) return 'right';
+            if (to.x < from.x) return 'left';
+            if (to.y > from.y) return 'down';
+            if (to.y < from.y) return 'up';
+            return direction; // 默认
         }
 
         // 初始化

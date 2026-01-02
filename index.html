@@ -1104,17 +1104,13 @@
             return visited.size;
         }
 
-        // AI 决策：选择最佳方向 - 高级版
+        // AI 决策：选择最佳方向 - 路径规划版
         function getAIDirection() {
             const head = snake[0];
-            const tail = snake[snake.length - 1];
             const directions = ['up', 'down', 'left', 'right'];
             const opposite = getOppositeDirection(direction);
-            const snakeLen = snake.length;
-            const gridArea = GRID_SIZE * GRID_SIZE;
-            const fillRatio = snakeLen / gridArea;
 
-            // 过滤掉反方向
+            // 过滤掉反方向，得到可用方向
             const validDirections = directions.filter(dir => dir !== opposite);
 
             // 收集所有安全的移动选项
@@ -1124,7 +1120,7 @@
                 const nextPos = getNextPosition(head, dir);
                 const willEatFood = nextPos.x === food.x && nextPos.y === food.y;
 
-                // 检查基本安全性
+                // 检查基本安全性（撞墙、撞自己）
                 if (!isSafePosition(nextPos, snake, willEatFood)) {
                     continue;
                 }
@@ -1134,42 +1130,19 @@
                 if (!willEatFood) {
                     futureSnake.pop();
                 }
-
                 const futureTail = futureSnake[futureSnake.length - 1];
 
                 // 关键检查：移动后能否到达尾巴
                 const canReachTail = hasPathToTarget(nextPos, futureTail, futureSnake);
 
-                // 计算可达空间
-                const accessibleSpace = countAccessibleSpace(nextPos, futureSnake);
-
                 // 计算到食物的距离
                 const distanceToFood = willEatFood ? 0 : manhattanDistance(nextPos, food);
-
-                // 计算综合得分
-                let score = 0;
-
-                // 基础分：可达空间越大越好
-                score += accessibleSpace * 2;
-
-                // 尾巴可达加分
-                if (canReachTail) score += 100;
-
-                // 食物加分（根据填充率调整）
-                if (willEatFood) {
-                    score += fillRatio < 0.5 ? 200 : 50; // 前半程积极吃，后半程谨慎
-                }
-
-                // 距离食物的惩罚（越远越低分）
-                score -= distanceToFood * (fillRatio < 0.3 ? 5 : 1);
 
                 safeMoves.push({
                     direction: dir,
                     distanceToFood: distanceToFood,
-                    accessibleSpace: accessibleSpace,
                     canReachTail: canReachTail,
                     isFood: willEatFood,
-                    score: score,
                     nextPos: nextPos
                 });
             }
@@ -1178,10 +1151,31 @@
                 return direction; // 无路可走
             }
 
-            // 使用综合评分系统选择最佳方向
-            safeMoves.sort((a, b) => b.score - a.score);
+            const snakeLen = snake.length;
 
-            // 返回得分最高的选项
+            // 策略 1：优先选择能到达尾巴的安全路线
+            const tailReachable = safeMoves.filter(m => m.canReachTail);
+
+            if (tailReachable.length > 0) {
+                // 在能到达尾巴的选项中，选离食物最近的
+                tailReachable.sort((a, b) => a.distanceToFood - b.distanceToFood);
+                return tailReachable[0].direction;
+            }
+
+            // 策略 2：如果没有能到达尾巴的路
+            // 对于短蛇（长度<10），选择空间最大的方向
+            // 对于长蛇，选离食物最近的（赌一把）
+            if (snakeLen < 10) {
+                // 计算每个方向的可达空间
+                safeMoves.forEach(m => {
+                    const futureSnake = [m.nextPos, ...snake];
+                    if (!m.isFood) futureSnake.pop();
+                    m.space = countAccessibleSpace(m.nextPos, futureSnake);
+                });
+                safeMoves.sort((a, b) => b.space - a.space);
+            } else {
+                safeMoves.sort((a, b) => a.distanceToFood - b.distanceToFood);
+            }
             return safeMoves[0].direction;
         }
 
